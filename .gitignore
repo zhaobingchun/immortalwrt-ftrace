@@ -1,0 +1,10 @@
+openwrt/
+artifacts/
+*.img
+*.img.gz
+*.apk
+*.tar
+*.tar.gz
+*.key
+*.pem
+.env*

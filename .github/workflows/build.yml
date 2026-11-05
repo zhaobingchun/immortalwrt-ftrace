@@ -1,0 +1,374 @@
+# Build only. This workflow does not connect to or flash any router.
+name: Build ImmortalWrt with UDP tracing
+'on':
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: immortalwrt-ftrace-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Prepare temporary runner
+      run: |
+        mkdir -p artifacts
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3 python3-setuptools python3-pyelftools rsync swig unzip zlib1g-dev file wget curl time xz-utils zstd libelf-dev pahole subversion
+        df -h
+    - name: Fetch official source
+      run: |
+        git clone --depth 1 --branch v25.12.2 https://github.com/immortalwrt/immortalwrt.git openwrt
+        git -C openwrt rev-parse HEAD > artifacts/source-commit.txt
+    - name: Install source feeds
+      working-directory: openwrt
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        ./scripts/feeds list -s > ../artifacts/feeds.txt
+        for directory in feeds/*; do
+          if [ -d "$directory/.git" ] || [ -f "$directory/.git" ]; then
+            printf '%s ' "$directory" >> ../artifacts/feed-commits.txt
+            git -C "$directory" rev-parse HEAD >> ../artifacts/feed-commits.txt
+          fi
+        done
+    - name: Configure current package selection and tracing
+      working-directory: openwrt
+      run: |
+        cat > .config <<'CONFIG'
+        CONFIG_TARGET_x86=y
+        CONFIG_TARGET_x86_64=y
+        CONFIG_TARGET_x86_64_DEVICE_generic=y
+        CONFIG_TARGET_ROOTFS_SQUASHFS=y
+        # CONFIG_TARGET_ROOTFS_EXT4FS is not set
+        CONFIG_GRUB_IMAGES=y
+        CONFIG_GRUB_EFI_IMAGES=y
+        CONFIG_TARGET_IMAGES_GZIP=y
+        CONFIG_TARGET_KERNEL_PARTSIZE=32
+        CONFIG_TARGET_ROOTFS_PARTSIZE=300
+        # CONFIG_ISO_IMAGES is not set
+        # CONFIG_QCOW2_IMAGES is not set
+        # CONFIG_VDI_IMAGES is not set
+        # CONFIG_VMDK_IMAGES is not set
+        # CONFIG_VHDX_IMAGES is not set
+        CONFIG_KERNEL_FTRACE=y
+        CONFIG_KERNEL_FUNCTION_TRACER=y
+        CONFIG_KERNEL_DYNAMIC_FTRACE=y
+        CONFIG_KERNEL_DEBUG_INFO=y
+        # CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set
+        CONFIG_KERNEL_DEBUG_INFO_BTF=y
+        CONFIG_KERNEL_DEBUG_INFO_BTF_MODULES=y
+        CONFIG_KERNEL_BPF_EVENTS=y
+        CONFIG_KERNEL_CGROUPS=y
+        CONFIG_KERNEL_CGROUP_BPF=y
+        CONFIG_LUCI_LANG_zh_Hans=y
+        CONFIG_VERSIONOPT=y
+        CONFIG_VERSION_DIST="ImmortalWrt"
+        CONFIG_VERSION_NUMBER="25.12.2-ftrace"
+        CONFIG_VERSION_REPO="https://downloads.immortalwrt.org/releases/25.12.2"
+        # CONFIG_PACKAGE_dnsmasq is not set
+        # CONFIG_PACKAGE_nftables is not set
+        # CONFIG_PACKAGE_apk-mbedtls is not set
+        # CONFIG_PACKAGE_opkg is not set
+        # CONFIG_PACKAGE_kmod-drm-i915 is not set
+        # CONFIG_PACKAGE_kmod-dwmac-intel is not set
+        # CONFIG_PACKAGE_kmod-nft-offload is not set
+        CONFIG_PACKAGE_6in4=y
+        CONFIG_PACKAGE_alsa-lib=y
+        CONFIG_PACKAGE_alsa-ucm-conf=y
+        CONFIG_PACKAGE_alsa-utils=y
+        CONFIG_PACKAGE_apk-openssl=y
+        CONFIG_PACKAGE_attendedsysupgrade-common=y
+        CONFIG_PACKAGE_autocore=y
+        CONFIG_PACKAGE_automount=y
+        CONFIG_PACKAGE_base-files=y
+        CONFIG_PACKAGE_bash=y
+        CONFIG_PACKAGE_ca-bundle=y
+        CONFIG_PACKAGE_cfdisk=y
+        CONFIG_PACKAGE_cgi-io=y
+        CONFIG_PACKAGE_coreutils-timeout=y
+        CONFIG_PACKAGE_curl=y
+        CONFIG_PACKAGE_ddns-scripts=y
+        CONFIG_PACKAGE_ddns-scripts-aliyun=y
+        CONFIG_PACKAGE_ddns-scripts-cloudflare=y
+        CONFIG_PACKAGE_ddns-scripts-services=y
+        CONFIG_PACKAGE_default-settings=y
+        CONFIG_PACKAGE_default-settings-chn=y
+        CONFIG_PACKAGE_dnsmasq-full=y
+        CONFIG_PACKAGE_dropbear=y
+        CONFIG_PACKAGE_etherwake=y
+        CONFIG_PACKAGE_etherwake-nfqueue=y
+        CONFIG_PACKAGE_fdisk=y
+        CONFIG_PACKAGE_firewall4=y
+        CONFIG_PACKAGE_flock=y
+        CONFIG_PACKAGE_getrandom=y
+        CONFIG_PACKAGE_grub2=y
+        CONFIG_PACKAGE_grub2-bios-setup=y
+        CONFIG_PACKAGE_grub2-efi=y
+        CONFIG_PACKAGE_i915-firmware-dmc=y
+        CONFIG_PACKAGE_ip-full=y
+        CONFIG_PACKAGE_iperf3=y
+        CONFIG_PACKAGE_jq=y
+        CONFIG_PACKAGE_jshn=y
+        CONFIG_PACKAGE_kernel=y
+        CONFIG_PACKAGE_kmod-8139cp=y
+        CONFIG_PACKAGE_kmod-8139too=y
+        CONFIG_PACKAGE_kmod-ac97=y
+        CONFIG_PACKAGE_kmod-amazon-ena=y
+        CONFIG_PACKAGE_kmod-amd-xgbe=y
+        CONFIG_PACKAGE_kmod-asn1-decoder=y
+        CONFIG_PACKAGE_kmod-bnx2=y
+        CONFIG_PACKAGE_kmod-button-hotplug=y
+        CONFIG_PACKAGE_kmod-crypto-acompress=y
+        CONFIG_PACKAGE_kmod-crypto-aead=y
+        CONFIG_PACKAGE_kmod-crypto-arc4=y
+        CONFIG_PACKAGE_kmod-crypto-authenc=y
+        CONFIG_PACKAGE_kmod-crypto-crc32=y
+        CONFIG_PACKAGE_kmod-crypto-ecb=y
+        CONFIG_PACKAGE_kmod-crypto-sha1=y
+        CONFIG_PACKAGE_kmod-cryptodev=y
+        CONFIG_PACKAGE_kmod-e1000=y
+        CONFIG_PACKAGE_kmod-e1000e=y
+        CONFIG_PACKAGE_kmod-forcedeth=y
+        CONFIG_PACKAGE_kmod-fs-f2fs=y
+        CONFIG_PACKAGE_kmod-hid=y
+        CONFIG_PACKAGE_kmod-hid-generic=y
+        CONFIG_PACKAGE_kmod-hwmon-core=y
+        CONFIG_PACKAGE_kmod-i2c-algo-bit=y
+        CONFIG_PACKAGE_kmod-i40e=y
+        CONFIG_PACKAGE_kmod-igb=y
+        CONFIG_PACKAGE_kmod-igbvf=y
+        CONFIG_PACKAGE_kmod-igc=y
+        CONFIG_PACKAGE_kmod-inet-diag=y
+        CONFIG_PACKAGE_kmod-ipt-tproxy=y
+        CONFIG_PACKAGE_kmod-ixgbe=y
+        CONFIG_PACKAGE_kmod-ixgbevf=y
+        CONFIG_PACKAGE_kmod-lib-crc-ccitt=y
+        CONFIG_PACKAGE_kmod-lib-lzo=y
+        CONFIG_PACKAGE_kmod-lib-textsearch=y
+        CONFIG_PACKAGE_kmod-macvlan=y
+        CONFIG_PACKAGE_kmod-mppe=y
+        CONFIG_PACKAGE_kmod-net-selftests=y
+        CONFIG_PACKAGE_kmod-nf-conntrack=y
+        CONFIG_PACKAGE_kmod-nf-nathelper=y
+        CONFIG_PACKAGE_kmod-nf-nathelper-extra=y
+        CONFIG_PACKAGE_kmod-nfnetlink-queue=y
+        CONFIG_PACKAGE_kmod-nft-core=y
+        CONFIG_PACKAGE_kmod-nft-nat=y
+        CONFIG_PACKAGE_kmod-nft-queue=y
+        CONFIG_PACKAGE_kmod-nft-tproxy=y
+        CONFIG_PACKAGE_kmod-pcnet32=y
+        CONFIG_PACKAGE_kmod-phy-ax88796b=y
+        CONFIG_PACKAGE_kmod-pppoe=y
+        CONFIG_PACKAGE_kmod-r8101=y
+        CONFIG_PACKAGE_kmod-r8125=y
+        CONFIG_PACKAGE_kmod-r8126=y
+        CONFIG_PACKAGE_kmod-r8168=y
+        CONFIG_PACKAGE_kmod-regmap-core=y
+        CONFIG_PACKAGE_kmod-sched-bpf=y
+        CONFIG_PACKAGE_kmod-sched-core=y
+        CONFIG_PACKAGE_kmod-sound-hda-codec-hdmi=y
+        CONFIG_PACKAGE_kmod-sound-hda-codec-realtek=y
+        CONFIG_PACKAGE_kmod-sound-hda-codec-via=y
+        CONFIG_PACKAGE_kmod-sound-hda-intel=y
+        CONFIG_PACKAGE_kmod-sound-i8x0=y
+        CONFIG_PACKAGE_kmod-sound-mpu401=y
+        CONFIG_PACKAGE_kmod-sound-via82xx=y
+        CONFIG_PACKAGE_kmod-tg3=y
+        CONFIG_PACKAGE_kmod-tulip=y
+        CONFIG_PACKAGE_kmod-tun=y
+        CONFIG_PACKAGE_kmod-usb-audio=y
+        CONFIG_PACKAGE_kmod-usb-hid=y
+        CONFIG_PACKAGE_kmod-usb-net=y
+        CONFIG_PACKAGE_kmod-usb-net-asix=y
+        CONFIG_PACKAGE_kmod-usb-net-asix-ax88179=y
+        CONFIG_PACKAGE_kmod-usb-net-rtl8150=y
+        CONFIG_PACKAGE_kmod-usb-net-rtl8152-vendor=y
+        CONFIG_PACKAGE_kmod-veth=y
+        CONFIG_PACKAGE_kmod-vmxnet3=y
+        CONFIG_PACKAGE_kmod-wireguard=y
+        CONFIG_PACKAGE_libblobmsg-json=y
+        CONFIG_PACKAGE_libc=y
+        CONFIG_PACKAGE_libcurl=y
+        CONFIG_PACKAGE_libf2fs=y
+        CONFIG_PACKAGE_libjson-script=y
+        CONFIG_PACKAGE_liblua=y
+        CONFIG_PACKAGE_liblucihttp=y
+        CONFIG_PACKAGE_liblucihttp-lua=y
+        CONFIG_PACKAGE_libopenssl=y
+        CONFIG_PACKAGE_libopenssl-conf=y
+        CONFIG_PACKAGE_libruby=y
+        CONFIG_PACKAGE_libstdcpp=y
+        CONFIG_PACKAGE_libubox=y
+        CONFIG_PACKAGE_libubox-lua=y
+        CONFIG_PACKAGE_libubus=y
+        CONFIG_PACKAGE_libubus-lua=y
+        CONFIG_PACKAGE_libuci-lua=y
+        CONFIG_PACKAGE_libucode=y
+        CONFIG_PACKAGE_libudebug=y
+        CONFIG_PACKAGE_libustream-openssl=y
+        CONFIG_PACKAGE_logd=y
+        CONFIG_PACKAGE_lua=y
+        CONFIG_PACKAGE_luci=y
+        CONFIG_PACKAGE_luci-app-argon-config=y
+        CONFIG_PACKAGE_luci-app-attendedsysupgrade=y
+        CONFIG_PACKAGE_luci-app-ddns=y
+        CONFIG_PACKAGE_luci-app-diskman=y
+        CONFIG_PACKAGE_luci-app-firewall=y
+        CONFIG_PACKAGE_luci-app-openclash=y
+        CONFIG_PACKAGE_luci-app-openvpn=y
+        CONFIG_PACKAGE_luci-app-package-manager=y
+        CONFIG_PACKAGE_luci-app-statistics=y
+        CONFIG_PACKAGE_luci-app-ttyd=y
+        CONFIG_PACKAGE_luci-app-udpxy=y
+        CONFIG_PACKAGE_luci-app-upnp=y
+        CONFIG_PACKAGE_luci-app-vlmcsd=y
+        CONFIG_PACKAGE_luci-app-wechatpush=y
+        CONFIG_PACKAGE_luci-app-wol=y
+        CONFIG_PACKAGE_luci-base=y
+        CONFIG_PACKAGE_luci-compat=y
+        CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-attendedsysupgrade-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-ddns-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-openvpn-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-statistics-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-udpxy-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y
+        CONFIG_PACKAGE_luci-i18n-wol-zh-cn=y
+        CONFIG_PACKAGE_luci-lib-base=y
+        CONFIG_PACKAGE_luci-lib-ip=y
+        CONFIG_PACKAGE_luci-lib-ipkg=y
+        CONFIG_PACKAGE_luci-lib-jsonc=y
+        CONFIG_PACKAGE_luci-lib-nixio=y
+        CONFIG_PACKAGE_luci-lib-uqr=y
+        CONFIG_PACKAGE_luci-light=y
+        CONFIG_PACKAGE_luci-lua-runtime=y
+        CONFIG_PACKAGE_luci-mod-admin-full=y
+        CONFIG_PACKAGE_luci-mod-network=y
+        CONFIG_PACKAGE_luci-mod-status=y
+        CONFIG_PACKAGE_luci-mod-system=y
+        CONFIG_PACKAGE_luci-proto-ipv6=y
+        CONFIG_PACKAGE_luci-proto-ppp=y
+        CONFIG_PACKAGE_luci-proto-wireguard=y
+        CONFIG_PACKAGE_luci-theme-argon=y
+        CONFIG_PACKAGE_luci-theme-bootstrap=y
+        CONFIG_PACKAGE_mkf2fs=y
+        CONFIG_PACKAGE_mtd=y
+        CONFIG_PACKAGE_odhcp6c=y
+        CONFIG_PACKAGE_odhcpd-ipv6only=y
+        CONFIG_PACKAGE_openssl-util=y
+        CONFIG_PACKAGE_partx-utils=y
+        CONFIG_PACKAGE_ppp=y
+        CONFIG_PACKAGE_ppp-mod-pppoe=y
+        CONFIG_PACKAGE_procd-ujail=y
+        CONFIG_PACKAGE_qrencode=y
+        CONFIG_PACKAGE_rpcd=y
+        CONFIG_PACKAGE_rpcd-mod-file=y
+        CONFIG_PACKAGE_rpcd-mod-iwinfo=y
+        CONFIG_PACKAGE_rpcd-mod-rpcsys=y
+        CONFIG_PACKAGE_rpcd-mod-ucode=y
+        CONFIG_PACKAGE_ruby=y
+        CONFIG_PACKAGE_ruby-bigdecimal=y
+        CONFIG_PACKAGE_ruby-date=y
+        CONFIG_PACKAGE_ruby-digest=y
+        CONFIG_PACKAGE_ruby-enc=y
+        CONFIG_PACKAGE_ruby-pstore=y
+        CONFIG_PACKAGE_ruby-psych=y
+        CONFIG_PACKAGE_ruby-stringio=y
+        CONFIG_PACKAGE_ruby-yaml=y
+        CONFIG_PACKAGE_tcpdump=y
+        CONFIG_PACKAGE_ubus=y
+        CONFIG_PACKAGE_ubusd=y
+        CONFIG_PACKAGE_uci=y
+        CONFIG_PACKAGE_ucode=y
+        CONFIG_PACKAGE_ucode-mod-fs=y
+        CONFIG_PACKAGE_ucode-mod-lua=y
+        CONFIG_PACKAGE_ucode-mod-math=y
+        CONFIG_PACKAGE_ucode-mod-ubus=y
+        CONFIG_PACKAGE_ucode-mod-uci=y
+        CONFIG_PACKAGE_uhttpd=y
+        CONFIG_PACKAGE_uhttpd-mod-ubus=y
+        CONFIG_PACKAGE_unzip=y
+        CONFIG_PACKAGE_urandom-seed=y
+        CONFIG_PACKAGE_urngd=y
+        CONFIG_PACKAGE_v2ray-geoip=y
+        CONFIG_PACKAGE_v2ray-geosite=y
+        CONFIG_PACKAGE_vlmcsd=y
+        CONFIG
+        make defconfig
+        cp .config ../artifacts/build.config
+        python3 - <<'PY'
+        from pathlib import Path
+        config = Path('.config').read_text()
+        required = ['KERNEL_FTRACE', 'KERNEL_FUNCTION_TRACER', 'KERNEL_DYNAMIC_FTRACE', 'KERNEL_DEBUG_INFO_BTF', 'KERNEL_CGROUP_BPF']
+        missing = [key for key in required if f'CONFIG_{key}=y' not in config.splitlines()]
+        if missing:
+            raise SystemExit('Required build options were dropped: ' + ', '.join(missing))
+        requested = ['6in4', 'alsa-lib', 'alsa-ucm-conf', 'alsa-utils', 'apk-openssl', 'attendedsysupgrade-common', 'autocore', 'automount', 'base-files', 'bash', 'ca-bundle', 'cfdisk', 'cgi-io', 'coreutils-timeout', 'curl', 'ddns-scripts', 'ddns-scripts-aliyun', 'ddns-scripts-cloudflare', 'ddns-scripts-services', 'default-settings', 'default-settings-chn', 'dnsmasq-full', 'dropbear', 'etherwake', 'etherwake-nfqueue', 'fdisk', 'firewall4', 'flock', 'getrandom', 'grub2', 'grub2-bios-setup', 'grub2-efi', 'i915-firmware-dmc', 'ip-full', 'iperf3', 'jq', 'jshn', 'kernel', 'kmod-8139cp', 'kmod-8139too', 'kmod-ac97', 'kmod-amazon-ena', 'kmod-amd-xgbe', 'kmod-asn1-decoder', 'kmod-bnx2', 'kmod-button-hotplug', 'kmod-crypto-acompress', 'kmod-crypto-aead', 'kmod-crypto-arc4', 'kmod-crypto-authenc', 'kmod-crypto-crc32', 'kmod-crypto-ecb', 'kmod-crypto-sha1', 'kmod-cryptodev', 'kmod-e1000', 'kmod-e1000e', 'kmod-forcedeth', 'kmod-fs-f2fs', 'kmod-hid', 'kmod-hid-generic', 'kmod-hwmon-core', 'kmod-i2c-algo-bit', 'kmod-i40e', 'kmod-igb', 'kmod-igbvf', 'kmod-igc', 'kmod-inet-diag', 'kmod-ipt-tproxy', 'kmod-ixgbe', 'kmod-ixgbevf', 'kmod-lib-crc-ccitt', 'kmod-lib-lzo', 'kmod-lib-textsearch', 'kmod-macvlan', 'kmod-mppe', 'kmod-net-selftests', 'kmod-nf-conntrack', 'kmod-nf-nathelper', 'kmod-nf-nathelper-extra', 'kmod-nfnetlink-queue', 'kmod-nft-core', 'kmod-nft-nat', 'kmod-nft-queue', 'kmod-nft-tproxy', 'kmod-pcnet32', 'kmod-phy-ax88796b', 'kmod-pppoe', 'kmod-r8101', 'kmod-r8125', 'kmod-r8126', 'kmod-r8168', 'kmod-regmap-core', 'kmod-sched-bpf', 'kmod-sched-core', 'kmod-sound-hda-codec-hdmi', 'kmod-sound-hda-codec-realtek', 'kmod-sound-hda-codec-via', 'kmod-sound-hda-intel', 'kmod-sound-i8x0', 'kmod-sound-mpu401', 'kmod-sound-via82xx', 'kmod-tg3', 'kmod-tulip', 'kmod-tun', 'kmod-usb-audio', 'kmod-usb-hid', 'kmod-usb-net', 'kmod-usb-net-asix', 'kmod-usb-net-asix-ax88179', 'kmod-usb-net-rtl8150', 'kmod-usb-net-rtl8152-vendor', 'kmod-veth', 'kmod-vmxnet3', 'kmod-wireguard', 'libblobmsg-json', 'libc', 'libcurl', 'libf2fs', 'libjson-script', 'liblua', 'liblucihttp', 'liblucihttp-lua', 'libopenssl', 'libopenssl-conf', 'libruby', 'libstdcpp', 'libubox', 'libubox-lua', 'libubus', 'libubus-lua', 'libuci-lua', 'libucode', 'libudebug', 'libustream-openssl', 'logd', 'lua', 'luci', 'luci-app-argon-config', 'luci-app-attendedsysupgrade', 'luci-app-ddns', 'luci-app-diskman', 'luci-app-firewall', 'luci-app-openclash', 'luci-app-openvpn', 'luci-app-package-manager', 'luci-app-statistics', 'luci-app-ttyd', 'luci-app-udpxy', 'luci-app-upnp', 'luci-app-vlmcsd', 'luci-app-wechatpush', 'luci-app-wol', 'luci-base', 'luci-compat', 'luci-i18n-argon-config-zh-cn', 'luci-i18n-attendedsysupgrade-zh-cn', 'luci-i18n-base-zh-cn', 'luci-i18n-ddns-zh-cn', 'luci-i18n-diskman-zh-cn', 'luci-i18n-firewall-zh-cn', 'luci-i18n-openvpn-zh-cn', 'luci-i18n-package-manager-zh-cn', 'luci-i18n-statistics-zh-cn', 'luci-i18n-ttyd-zh-cn', 'luci-i18n-udpxy-zh-cn', 'luci-i18n-upnp-zh-cn', 'luci-i18n-vlmcsd-zh-cn', 'luci-i18n-wechatpush-zh-cn', 'luci-i18n-wol-zh-cn', 'luci-lib-base', 'luci-lib-ip', 'luci-lib-ipkg', 'luci-lib-jsonc', 'luci-lib-nixio', 'luci-lib-uqr', 'luci-light', 'luci-lua-runtime', 'luci-mod-admin-full', 'luci-mod-network', 'luci-mod-status', 'luci-mod-system', 'luci-proto-ipv6', 'luci-proto-ppp', 'luci-proto-wireguard', 'luci-theme-argon', 'luci-theme-bootstrap', 'mkf2fs', 'mtd', 'odhcp6c', 'odhcpd-ipv6only', 'openssl-util', 'partx-utils', 'ppp', 'ppp-mod-pppoe', 'procd-ujail', 'qrencode', 'rpcd', 'rpcd-mod-file', 'rpcd-mod-iwinfo', 'rpcd-mod-rpcsys', 'rpcd-mod-ucode', 'ruby', 'ruby-bigdecimal', 'ruby-date', 'ruby-digest', 'ruby-enc', 'ruby-pstore', 'ruby-psych', 'ruby-stringio', 'ruby-yaml', 'tcpdump', 'ubus', 'ubusd', 'uci', 'ucode', 'ucode-mod-fs', 'ucode-mod-lua', 'ucode-mod-math', 'ucode-mod-ubus', 'ucode-mod-uci', 'uhttpd', 'uhttpd-mod-ubus', 'unzip', 'urandom-seed', 'urngd', 'v2ray-geoip', 'v2ray-geosite', 'vlmcsd']
+        selected = set(config.splitlines())
+        lost = [p for p in requested if f'CONFIG_PACKAGE_{p}=y' not in selected]
+        Path('../artifacts/package-selection-report.txt').write_text('Requested package count: ' + str(len(requested)) + '\nPackages not selected after defconfig:\n' + '\n'.join(lost) + '\n')
+        critical = [p for p in lost if p.startswith('kmod-')]
+        if critical:
+            raise SystemExit('Required kernel packages were dropped: ' + ', '.join(critical))
+        PY
+    - name: Download sources
+      working-directory: openwrt
+      run: |
+        set -o pipefail
+        make -j8 download V=s 2>&1 | tee ../artifacts/download.log
+    - name: Compile firmware
+      working-directory: openwrt
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" V=s 2>&1 | tee ../artifacts/build.log
+    - name: Verify final kernel and collect images
+      working-directory: openwrt
+      run: |
+        python3 - <<'PY'
+        from pathlib import Path
+        import shutil
+        out = Path('../artifacts')
+        configs = list(Path('build_dir').glob('target-*/linux-*/linux-6.12.*/.config'))
+        if len(configs) != 1:
+            raise SystemExit('Expected exactly one generated Linux kernel config: ' + str(configs))
+        config = configs[0].read_text()
+        required = ['FUNCTION_TRACER', 'DYNAMIC_FTRACE', 'DYNAMIC_FTRACE_WITH_DIRECT_CALLS', 'DEBUG_INFO_BTF', 'CGROUP_BPF']
+        missing = [key for key in required if f'CONFIG_{key}=y' not in config.splitlines()]
+        shutil.copy2(configs[0], out / 'linux-kernel.config')
+        if missing:
+            raise SystemExit('Final Linux kernel is missing: ' + ', '.join(missing))
+        images = list(Path('bin/targets/x86/64').glob('*-squashfs-combined-efi.img.gz'))
+        if not images:
+            raise SystemExit('No x86 squashfs EFI image was produced')
+        for path in images:
+            shutil.copy2(path, out / path.name)
+        for name in ['sha256sums', 'config.buildinfo', 'feeds.buildinfo', 'profiles.json']:
+            path = Path('bin/targets/x86/64') / name
+            if path.is_file():
+                shutil.copy2(path, out / name)
+        PY
+        tar -czf ../artifacts/custom-kernel-packages.tar.gz -C bin/targets/x86/64 packages
+        (cd ../artifacts && sha256sum *.img.gz custom-kernel-packages.tar.gz > SHA256SUMS.local)
+    - name: Upload firmware and diagnostic reports
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: immortalwrt-25.12.2-x86-64-ftrace
+        path: artifacts/
+        retention-days: 3
+        compression-level: 0
+        if-no-files-found: error
